@@ -1,0 +1,23 @@
+[package]
+name = "soundcraft-bridge"
+description = "Wild Animal's headless SoundCraft backend: the control protocol over stdio, with real-time playback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "soundcraft-bridge"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+soundcraft-engine.workspace = true
+soundcraft-playback.workspace = true
+serde_json.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+soundcraft-audio-io.workspace = true

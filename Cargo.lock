@@ -3616,6 +3616,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "soundcraft-bridge"
+version = "0.6.1"
+dependencies = [
+ "log",
+ "serde_json",
+ "soundcraft-audio-io",
+ "soundcraft-engine",
+ "soundcraft-playback",
+]
+
+[[package]]
 name = "soundcraft-clap-host"
 version = "0.7.0"
 dependencies = [

@@ -63,6 +63,7 @@ impl Bridge {
             // The transport commands as methods of their own: `transport.play {from?}` is
             // `engine.execute {command: "transport.play", params: {from?}}`.
             m if m.starts_with("transport.") => self.execute(m, &params),
+            "devices" | "audio.devices" => Ok(crate::audio::devices_json()),
             "bridge.quit" | "app.quit" => {
                 self.quit = true;
                 Ok(json!({}))

@@ -156,7 +156,7 @@ pub fn run(mut bridge: Bridge, control: Option<u16>) -> Result<End, String> {
             }
             Ok(Msg::Closed(None)) => break End::Done,
             Ok(Msg::Closed(Some(e))) => break End::Io(format!("stdin: {e}")),
-            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Timeout) => bridge.tick(),
             Err(RecvTimeoutError::Disconnected) => break End::Done,
         }
     };

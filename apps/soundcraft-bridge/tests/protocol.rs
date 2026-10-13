@@ -11,7 +11,7 @@ fn a_session_is_built_mixed_and_bounced_over_stdio() {
     let dir = tmpdir("bounce");
     let tone = dir.join("Tone.wav");
     sine_wav(&tone, 0.5, 1.0);
-    let mut b = Proc::spawn(&[]);
+    let mut b = Proc::spawn(&["--no-audio"]);
 
     let s = b.execute("session.new", json!({"name": "Bridge", "sample_rate": 48000}));
     assert_eq!(s["sample_rate"], 48000, "{s}");
@@ -46,7 +46,7 @@ fn a_session_is_built_mixed_and_bounced_over_stdio() {
 
 #[test]
 fn bridge_quit_ends_the_process_after_its_reply() {
-    let mut b = Proc::spawn(&[]);
+    let mut b = Proc::spawn(&["--no-audio"]);
     assert_eq!(b.ok("bridge.quit", json!({})), json!({}));
     let status = b.child.wait().unwrap();
     assert!(status.success());
@@ -63,7 +63,7 @@ fn bad_arguments_exit_with_2() {
 fn the_control_port_speaks_the_same_protocol() {
     use std::io::{BufRead, BufReader, Write};
     let mut child = common::bin()
-        .args(["--control", "0"])
+        .args(["--no-audio", "--control", "0"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

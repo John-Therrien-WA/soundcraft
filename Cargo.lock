@@ -3624,6 +3624,7 @@ dependencies = [
  "soundcraft-audio-io",
  "soundcraft-engine",
  "soundcraft-playback",
+ "soundcraft-time",
 ]
 
 [[package]]

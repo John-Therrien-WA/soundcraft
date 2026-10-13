@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn replies_carry_the_id_and_the_outcome() {
-        let mut b = Bridge::new(soundcraft_engine::Engine::default());
+        let mut b = Bridge::silent(soundcraft_engine::Engine::default());
         let ok: Value = serde_json::from_str(&answer(&mut b, r#"{"id":7,"method":"session.inspect"}"#)).unwrap();
         assert_eq!((ok["id"].as_i64(), ok["ok"].as_bool()), (Some(7), Some(true)), "{ok}");
         assert!(ok["result"]["tracks"].is_array());

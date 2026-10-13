@@ -29,10 +29,10 @@ The headless binary the lab talks to. It runs upstream's `engine` (and through i
 
 What still needs upstream, or more of the bridge:
 
-- `Player::silent` in `crates/playback` (the silent clock on request, for `--no-audio`) is our one change inside upstream's crates (a constructor and its test), in its own commit, to be filed as a pull request.
-- `cargo xtask layers` reports `soundcraft-bridge` as not registered: upstream's check exempts only its own three apps.
+- Our changes inside upstream's `crates/playback` (`Player::silent`, the silent clock on request for `--no-audio`, with its test; the clock thread joined when the player drops; `Player::start_error`, the reason a built stream would not start; one shared `Shared` constructor) are small commits of their own, to be filed as a pull request.
+- `xtask/src/main.rs` lists `soundcraft-bridge` in `EXEMPT` (one word), so that `cargo xtask layers` passes; upstream's check exempts only its own apps.
 - Recording (`transport.record` is refused), MIDI device input, plugin tempo and transport, recording latency compensation, out-of-process plugin hosting, and an audio callback that neither allocates nor hands work to the rayon pool. In the order the lab reaches for them, plugin tempo and transport from the session comes next.
-- The position advances in steps of the mix block (512 session samples), and a device running at its own default buffer does not report that size.
+- The position is the render head (it leads the audible output) and advances in steps of the render quantum, at most 512 session samples; a device running at its own default buffer does not report that size. A device rate unlike the session's is resampled by linear interpolation without a filter. Both are in the crate `README.md`.
 
 ## Rules
 

@@ -484,6 +484,25 @@ impl Player {
         p
     }
 
+    /// A player that opens no audio device: the silent clock runs the transport (position, end,
+    /// loop) and the mix in real time, as when no device is available. For hosts started with
+    /// `--no-audio` and for tests that must not make a sound.
+    pub fn silent(session: Arc<Session>) -> Player {
+        let shared = Arc::new(Shared {
+            position: AtomicI64::new(0),
+            playing: AtomicBool::new(false),
+            speed: AtomicU32::new(1000),
+            meters: Mutex::new(MeterSnapshot::default()),
+        });
+        let (tx, rx) = channel();
+        let (gtx, grx) = channel();
+        let side = Mutex::new(Side::new(session.sample_rate.as_f64() as f32, grx));
+        let p = Player::silent_clock_with(shared, tx, rx, Arc::clone(&session), side, gtx);
+        p.side().return_old_sessions(&p.tx);
+        p.update_session(session);
+        p
+    }
+
     /// What stopped the audio output, once: a bug in the engine, or the device went away or
     /// stopped asking for audio while playing.
     pub fn trouble(&self) -> Option<OutputTrouble> {
@@ -966,6 +985,24 @@ fn open_device(want_rate: u32, want_ch: u16, cfg: &AudioConfig) -> Result<(cpal:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_silent_player_runs_the_transport_without_a_device() {
+        let session = Arc::new(Session::new("Silent", soundcraft_time::SampleRate::new(48_000).unwrap()));
+        let p = Player::silent(session);
+        assert!(p.silent && p.device_channels == 0, "{}", p.device_name);
+        p.play(0, Some(2_400), None);
+        assert!(p.is_playing());
+        let t0 = std::time::Instant::now();
+        while p.is_playing() && t0.elapsed() < std::time::Duration::from_secs(2) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!p.is_playing(), "playback with an end stops by itself");
+        assert!(p.position() >= 2_400, "position {}", p.position());
+        p.locate(96_000);
+        assert_eq!(p.position(), 96_000);
+    }
 
     #[test]
     fn reusable_meter_snapshot_updates_and_drops_stale_tracks() {

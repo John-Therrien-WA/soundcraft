@@ -67,6 +67,9 @@ pub fn check_opened(player: &Player, cfg: &AudioConfig) -> Result<(), String> {
     if player.silent {
         return Err("no audio output could be opened (pass --no-audio for the silent clock)".into());
     }
+    if let Some(e) = &player.start_error {
+        return Err(format!("`{}` was opened but would not start: {e}", player.device_name));
+    }
     if let Some(want) = &cfg.output
         && &player.device_name != want
     {

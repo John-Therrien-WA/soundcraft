@@ -74,6 +74,17 @@ enum Cmd {
     Locate(Samples),
 }
 
+impl Shared {
+    fn new_arc() -> Arc<Shared> {
+        Arc::new(Shared {
+            position: AtomicI64::new(0),
+            playing: AtomicBool::new(false),
+            speed: AtomicU32::new(1000),
+            meters: Mutex::new(MeterSnapshot::default()),
+        })
+    }
+}
+
 struct Shared {
     position: AtomicI64,
     playing: AtomicBool,
@@ -466,6 +477,22 @@ pub struct Player {
     pub device_buffer: Option<u32>,
     /// True when no audio device could be opened (silent clock).
     pub silent: bool,
+    /// Why a device stream that was built could not be started (`None`: it runs).
+    pub start_error: Option<String>,
+    /// The silent clock thread and its stop flag; joined when the player drops, so the plugin
+    /// instances the thread owns are gone by then.
+    #[cfg(not(target_arch = "wasm32"))]
+    clock: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((stop, handle)) = self.clock.take() {
+            stop.store(true, Ordering::Relaxed);
+            let _ = handle.join();
+        }
+    }
 }
 
 impl Player {
@@ -488,12 +515,7 @@ impl Player {
     /// loop) and the mix in real time, as when no device is available. For hosts started with
     /// `--no-audio` and for tests that must not make a sound.
     pub fn silent(session: Arc<Session>) -> Player {
-        let shared = Arc::new(Shared {
-            position: AtomicI64::new(0),
-            playing: AtomicBool::new(false),
-            speed: AtomicU32::new(1000),
-            meters: Mutex::new(MeterSnapshot::default()),
-        });
+        let shared = Shared::new_arc();
         let (tx, rx) = channel();
         let (gtx, grx) = channel();
         let side = Mutex::new(Side::new(session.sample_rate.as_f64() as f32, grx));
@@ -521,12 +543,7 @@ impl Player {
     }
 
     fn open(session: Arc<Session>, cfg: &AudioConfig) -> Player {
-        let shared = Arc::new(Shared {
-            position: AtomicI64::new(0),
-            playing: AtomicBool::new(false),
-            speed: AtomicU32::new(1000),
-            meters: Mutex::new(MeterSnapshot::default()),
-        });
+        let shared = Shared::new_arc();
         let want = session.sample_rate.hz();
         let want_ch = u16::try_from(main_channels(&session)).unwrap_or(2);
         let side_rate = session.sample_rate.as_f64() as f32;
@@ -553,7 +570,8 @@ impl Player {
                     };
                     match built {
                         Ok(stream) => {
-                            if let Err(e) = stream.play() {
+                            let start_error = stream.play().err().map(|e| e.to_string());
+                            if let Some(e) = &start_error {
                                 log::warn!("audio stream failed to start: {e}");
                             }
                             let buffer = match config.buffer_size {
@@ -577,6 +595,9 @@ impl Player {
                                 device_channels: config.channels,
                                 device_buffer: buffer,
                                 silent: false,
+                                start_error,
+                                #[cfg(not(target_arch = "wasm32"))]
+                                clock: None,
                             };
                         }
                         Err(e) => log::warn!("cannot open audio stream ({:?}): {e}", config.buffer_size),
@@ -621,6 +642,8 @@ impl Player {
         let mut state = AudioState::new(rx, Arc::clone(&shared), session, f64::from(rate), gtx);
         let fault = Arc::new(Fault::default());
         let failed = Arc::clone(&fault);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
         let spawn = std::thread::Builder::new().name("soundcraft-clock".into()).spawn(move || {
             let mut buf = vec![0.0f32; 4096];
             let mut last = std::time::Instant::now();
@@ -634,14 +657,18 @@ impl Player {
                     let shared = Arc::clone(&state.shared);
                     guarded_block(&failed, &shared, b, |b| state.fill(b, 2));
                 }
-                if Arc::strong_count(&state.shared) <= 1 {
+                if stopped.load(Ordering::Relaxed) || Arc::strong_count(&state.shared) <= 1 {
                     break;
                 }
             }
         });
-        if let Err(e) = spawn {
-            log::warn!("clock thread failed: {e}");
-        }
+        let clock = match spawn {
+            Ok(handle) => Some((stop, handle)),
+            Err(e) => {
+                log::warn!("clock thread failed: {e}");
+                None
+            }
+        };
         Player {
             shared,
             fault,
@@ -654,6 +681,8 @@ impl Player {
             device_channels: 0,
             device_buffer: None,
             silent: true,
+            start_error: None,
+            clock,
         }
     }
 
@@ -677,6 +706,7 @@ impl Player {
             device_channels: 0,
             device_buffer: None,
             silent: true,
+            start_error: None,
         }
     }
 
@@ -985,6 +1015,17 @@ fn open_device(want_rate: u32, want_ch: u16, cfg: &AudioConfig) -> Result<(cpal:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dropping_a_silent_player_ends_its_clock_thread() {
+        let session = Arc::new(Session::new("Silent", soundcraft_time::SampleRate::new(48_000).unwrap()));
+        let p = Player::silent(Arc::clone(&session));
+        p.play(0, None, None);
+        drop(p);
+        // The clock thread owned a session snapshot (and would own plugin instances); it is joined.
+        assert_eq!(Arc::strong_count(&session), 1);
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

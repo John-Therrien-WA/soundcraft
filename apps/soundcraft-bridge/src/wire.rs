@@ -10,12 +10,58 @@ use std::io::{BufRead, Read};
 /// largest plugin state `mix.insert_state` carries plus 1 MiB of JSON around it.
 pub const MAX_LINE: usize = soundcraft_engine::model::b64::MAX_DECODED_BYTES.div_ceil(3) * 4 + (1 << 20);
 
+/// What one read of a request stream gave.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Next {
+    /// A request line (never empty or blank).
+    Line(String),
+    /// A line that cannot be a request (too long, or not UTF-8), already skipped to its newline:
+    /// the reply to send, and then reading goes on.
+    Reject(String),
+    /// End of stream.
+    Eof,
+    /// The stream failed.
+    Failed(String),
+}
+
+/// The reply for a request that never became a line.
+pub fn rejection(error: &str) -> String {
+    json!({"id": null, "ok": false, "error": error}).to_string()
+}
+
+/// Read the next request from `reader`: blank lines are skipped, and a line that is too long or
+/// not UTF-8 is answered with an error reply rather than ending the stream.
+pub fn next_request(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> Next {
+    loop {
+        match read_bounded_line(reader, buf, max) {
+            Ok(true) => {}
+            Ok(false) => return Next::Eof,
+            Err(ReadError::TooLong) => return Next::Reject(rejection(&format!("request line longer than {max} bytes; it was skipped"))),
+            Err(ReadError::Io(e)) => return Next::Failed(e),
+        }
+        match std::str::from_utf8(buf) {
+            Ok(line) if line.trim().is_empty() => {}
+            Ok(line) => return Next::Line(line.to_string()),
+            Err(_) => return Next::Reject(rejection("request line is not UTF-8; it was skipped")),
+        }
+    }
+}
+
+/// Why a line could not be read.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReadError {
+    /// Longer than the limit; the rest of the line has been discarded.
+    TooLong,
+    Io(String),
+}
+
 /// Read one `\n`-terminated line of at most `max` bytes into `buf` (newline and a trailing `\r`
-/// stripped). `Ok(false)` at end of stream; `Err` when the line is too long or the read fails.
-pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> Result<bool, String> {
+/// stripped). `Ok(false)` at end of stream. A line over `max` is discarded up to its newline, so
+/// the next read starts on the next line, and reported as [`ReadError::TooLong`].
+pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> Result<bool, ReadError> {
     buf.clear();
     let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
-    let n = reader.take(limit).read_until(b'\n', buf).map_err(|e| e.to_string())?;
+    let n = reader.by_ref().take(limit).read_until(b'\n', buf).map_err(|e| ReadError::Io(e.to_string()))?;
     if n == 0 {
         return Ok(false);
     }
@@ -27,9 +73,31 @@ pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usiz
         return Ok(true);
     }
     if buf.len() > max {
-        return Err(format!("request line longer than {max} bytes"));
+        buf.clear();
+        skip_line(reader).map_err(|e| ReadError::Io(e.to_string()))?;
+        return Err(ReadError::TooLong);
     }
     Ok(true)
+}
+
+/// Discard input up to and including the next newline (or the end of the stream).
+fn skip_line(reader: &mut impl BufRead) -> std::io::Result<()> {
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        match chunk.iter().position(|&b| b == b'\n') {
+            Some(i) => {
+                reader.consume(i + 1);
+                return Ok(());
+            }
+            None => {
+                let n = chunk.len();
+                reader.consume(n);
+            }
+        }
+    }
 }
 
 /// Answer one request line with one reply line (no newline).
@@ -68,7 +136,24 @@ mod tests {
         assert_eq!(read_bounded_line(&mut input, &mut buf, 10), Ok(false));
         let long = [b'x'; 100];
         let mut input: &[u8] = &long;
-        assert!(read_bounded_line(&mut input, &mut buf, 10).is_err());
+        assert_eq!(read_bounded_line(&mut input, &mut buf, 10), Err(ReadError::TooLong));
+        assert_eq!(read_bounded_line(&mut input, &mut buf, 10), Ok(false));
+    }
+
+    #[test]
+    fn a_long_line_is_skipped_and_the_next_one_read() {
+        let mut input = Vec::new();
+        input.extend_from_slice(&[b'x'; 5000]);
+        input.extend_from_slice(b"\nok\n\xff\xfe\n   \nlast\n");
+        // A small buffer makes the skip cross several fills.
+        let mut r = std::io::BufReader::with_capacity(16, &input[..]);
+        let mut buf = Vec::new();
+        let rejected = |n: Next| matches!(n, Next::Reject(m) if m.contains("\"ok\":false"));
+        assert!(rejected(next_request(&mut r, &mut buf, 100)));
+        assert_eq!(next_request(&mut r, &mut buf, 100), Next::Line("ok".into()));
+        assert!(rejected(next_request(&mut r, &mut buf, 100)), "not UTF-8");
+        assert_eq!(next_request(&mut r, &mut buf, 100), Next::Line("last".into()), "blank lines are skipped");
+        assert_eq!(next_request(&mut r, &mut buf, 100), Next::Eof);
     }
 
     #[test]

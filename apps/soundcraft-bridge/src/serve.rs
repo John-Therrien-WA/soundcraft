@@ -23,6 +23,8 @@ enum Sink {
 
 enum Msg {
     Line(String, Sink),
+    /// A stdin line that was not a request: the error reply to write.
+    Reject(String),
     /// stdin reached its end (or failed): the spawning process is gone or done.
     Closed(Option<String>),
 }
@@ -78,20 +80,18 @@ fn serve_tcp(stream: TcpStream, tx: Sender<Msg>) {
     let mut reader = BufReader::new(read);
     let mut buf = Vec::new();
     loop {
-        match wire::read_bounded_line(&mut reader, &mut buf, wire::MAX_LINE) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(e) => {
-                let _ = writeln!(out, "{}", json!({"id": null, "ok": false, "error": e}));
-                break;
+        let line = match wire::next_request(&mut reader, &mut buf, wire::MAX_LINE) {
+            wire::Next::Line(line) => line,
+            wire::Next::Reject(reply) => {
+                if writeln!(out, "{reply}").is_err() {
+                    break;
+                }
+                continue;
             }
-        }
-        let Ok(line) = std::str::from_utf8(&buf) else { break };
-        if line.trim().is_empty() {
-            continue;
-        }
+            wire::Next::Eof | wire::Next::Failed(_) => break,
+        };
         let (rtx, rrx) = channel();
-        if tx.send(Msg::Line(line.to_string(), Sink::Tcp(rtx))).is_err() {
+        if tx.send(Msg::Line(line, Sink::Tcp(rtx))).is_err() {
             break;
         }
         let Ok(reply) = rrx.recv() else { break };
@@ -106,19 +106,21 @@ fn read_stdin(tx: Sender<Msg>) {
     let mut reader = stdin.lock();
     let mut buf = Vec::new();
     loop {
-        let why = match wire::read_bounded_line(&mut reader, &mut buf, wire::MAX_LINE) {
-            Ok(true) => match std::str::from_utf8(&buf) {
-                Ok(line) if line.trim().is_empty() => continue,
-                Ok(line) => {
-                    if tx.send(Msg::Line(line.to_string(), Sink::Stdout)).is_err() {
-                        return;
-                    }
-                    continue;
+        let why = match wire::next_request(&mut reader, &mut buf, wire::MAX_LINE) {
+            wire::Next::Line(line) => {
+                if tx.send(Msg::Line(line, Sink::Stdout)).is_err() {
+                    return;
                 }
-                Err(_) => Some("stdin is not UTF-8".to_string()),
-            },
-            Ok(false) => None,
-            Err(e) => Some(e),
+                continue;
+            }
+            wire::Next::Reject(reply) => {
+                if tx.send(Msg::Reject(reply)).is_err() {
+                    return;
+                }
+                continue;
+            }
+            wire::Next::Eof => None,
+            wire::Next::Failed(e) => Some(e),
         };
         let _ = tx.send(Msg::Closed(why));
         return;
@@ -152,6 +154,12 @@ pub fn run(mut bridge: Bridge, control: Option<u16>) -> Result<End, String> {
                     // Let a TCP connection thread write the quit reply before the process ends.
                     std::thread::sleep(Duration::from_millis(50));
                     break End::Done;
+                }
+            }
+            Ok(Msg::Reject(reply)) => {
+                let mut o = stdout.lock();
+                if let Err(e) = writeln!(o, "{reply}").and_then(|()| o.flush()) {
+                    break End::Io(format!("stdout: {e}"));
                 }
             }
             Ok(Msg::Closed(None)) => break End::Done,

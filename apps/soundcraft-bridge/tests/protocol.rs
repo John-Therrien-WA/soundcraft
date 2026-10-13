@@ -93,3 +93,28 @@ fn the_control_port_speaks_the_same_protocol() {
     drop(child.stdin.take());
     assert!(child.wait().unwrap().success());
 }
+
+#[test]
+fn stdin_lines_that_are_not_requests_are_answered_and_not_fatal() {
+    let mut b = Proc::spawn(&["--no-audio"]);
+
+    b.send_raw(b"\xff\xfe not utf-8\n");
+    let r = b.read_reply();
+    assert_eq!((r["id"].is_null(), r["ok"].as_bool()), (true, Some(false)), "{r}");
+    assert!(r["error"].as_str().unwrap().contains("UTF-8"), "{r}");
+
+    b.send_raw(&common::oversized_line());
+    let r = b.read_reply();
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().unwrap().contains("longer than"), "{r}");
+
+    b.send_raw(b"{not json\n");
+    assert!(b.read_reply()["error"].as_str().unwrap().starts_with("bad JSON"));
+    b.send_raw(b"{\"id\": 9}\n");
+    assert!(b.read_reply()["error"].as_str().unwrap().contains("`method` required"));
+
+    // The process is alive and in step with the stream: the next request gets its own reply.
+    assert_eq!(b.ok("transport.status", json!({}))["playing"], false);
+    let (status, stderr) = b.finish();
+    assert!(status.success(), "{status:?} {stderr}");
+}

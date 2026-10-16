@@ -32,11 +32,12 @@ const LAYERS: &[(&str, u8)] = &[
     ("playback", 4),
     ("automation", 5),
     ("ui-egui", 6),
+    ("wild-animal-plugins", 1),
 ];
 /// Standalone format crates: no workspace dependencies at all (publishable on their own).
 const STANDALONE: &[&str] = &["time", "audio-io", "midi", "video", "dsp"];
 const UI_CRATES: &[&str] = &["craft-ui", "egui", "eframe", "winit", "egui_kittest", "rfd", "egui-wgpu", "egui_glow"];
-const EXEMPT: &[&str] = &["soundcraft", "soundcraft-cli", "soundcraft-web", "soundcraft-bridge", "wild-animal-plugins", "xtask"];
+const EXEMPT: &[&str] = &["soundcraft", "soundcraft-cli", "soundcraft-web", "soundcraft-bridge", "xtask"];
 
 fn layers() -> Result<(), String> {
     let out =

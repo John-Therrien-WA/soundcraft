@@ -215,6 +215,13 @@ pub trait Plugin: Send {
     }
     /// The transport for the next block, given before `process`.
     fn set_transport(&mut self, _transport: &Transport) {}
+    /// The host session's tempo map, for plugins that follow tempo beyond the per-block
+    /// [`Transport`] (look ahead to the next tempo change, place events on the bar grid). Hosts
+    /// hand it over when the instance enters the session and again whenever the map changes,
+    /// always between blocks. SoundCraft's mixer hands a `soundcraft_time::TempoMap`; the type is
+    /// erased because this crate depends on no other SoundCraft crate, so a plugin downcasts it
+    /// (`Arc::clone(map).downcast::<TempoMap>()`). Must not block.
+    fn set_tempo_map(&mut self, _map: &Arc<dyn std::any::Any + Send + Sync>) {}
     /// Instruments: note events at sample offsets within the next block.
     fn note_on(&mut self, _offset: usize, _note: u8, _velocity: u8) {}
     fn note_off(&mut self, _offset: usize, _note: u8) {}

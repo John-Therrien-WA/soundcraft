@@ -370,6 +370,8 @@ pub struct MixEngine {
     retired: Vec<Box<dyn Plugin>>,
     /// Ownership workspace reused for parallel strip processing.
     work: Vec<(usize, Strip)>,
+    /// The session tempo map last handed to the plugins, and the shared copy they hold.
+    tempo: Option<(soundcraft_time::TempoMap, Arc<dyn std::any::Any + Send + Sync>)>,
 }
 
 /// What `sync` needs to fill a slot.
@@ -443,6 +445,7 @@ impl MixEngine {
             adopt: HashMap::new(),
             retired: Vec::new(),
             work: Vec::new(),
+            tempo: None,
         }
     }
 
@@ -602,10 +605,32 @@ impl MixEngine {
     /// also call it right after swapping sessions so slots are filled before playback starts.
     pub fn ensure_synced(&mut self, s: &Session) {
         let key = (structure_fingerprint(s), s.tracks.len(), s.busses.len());
-        if key != self.synced {
+        let resync = key != self.synced;
+        if resync {
             self.sync(s);
             self.order = processing_order(s);
             self.synced = key;
+        }
+        self.share_tempo(s, resync);
+    }
+
+    /// Hands the session's tempo map to every plugin ([`Plugin::set_tempo_map`]) when it changed
+    /// since the last hand-over, and after a sync so new instances get it before their first
+    /// block. A change allocates one shared copy of the map.
+    fn share_tempo(&mut self, s: &Session, after_sync: bool) {
+        let changed = self.tempo.as_ref().is_none_or(|(m, _)| *m != s.tempo);
+        if changed {
+            let shared: Arc<dyn std::any::Any + Send + Sync> = Arc::new(s.tempo.clone());
+            self.tempo = Some((s.tempo.clone(), shared));
+        }
+        let Some((_, map)) = self.tempo.as_ref().filter(|_| changed || after_sync) else { return };
+        for st in self.strips.values_mut() {
+            for slot in st.plugins.iter_mut().flatten() {
+                slot.plugin.set_tempo_map(map);
+            }
+            if let Some(i) = &mut st.instrument {
+                i.plugin.set_tempo_map(map);
+            }
         }
     }
 
@@ -2568,6 +2593,58 @@ mod tests {
         assert_eq!((t0.tempo, t0.numerator, t0.denominator, t0.samples, t0.bar), (90.0, 3, 4, 96_000, 1));
         assert!((t0.seconds - 2.0).abs() < 1e-9 && (t0.quarters - 3.0).abs() < 1e-9 && (t0.bar_start - 3.0).abs() < 1e-9);
         assert!(!seen[1].playing);
+    }
+
+    struct TempoEar {
+        inner: Box<dyn Plugin>,
+        maps: Arc<std::sync::Mutex<Vec<soundcraft_time::TempoMap>>>,
+    }
+
+    impl Plugin for TempoEar {
+        fn info(&self) -> &'static soundcraft_dsp::PluginInfo {
+            self.inner.info()
+        }
+        fn prepare(&mut self, sr: f32, mb: usize, ch: usize) {
+            self.inner.prepare(sr, mb, ch);
+        }
+        fn reset(&mut self) {
+            self.inner.reset();
+        }
+        fn set_param(&mut self, id: &str, v: f32) -> bool {
+            self.inner.set_param(id, v)
+        }
+        fn param(&self, id: &str) -> Option<f32> {
+            self.inner.param(id)
+        }
+        fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+            self.inner.process(io, frames);
+        }
+        fn set_tempo_map(&mut self, map: &Arc<dyn std::any::Any + Send + Sync>) {
+            let map = Arc::clone(map).downcast::<soundcraft_time::TempoMap>().unwrap();
+            self.maps.lock().unwrap().push((*map).clone());
+        }
+    }
+
+    #[test]
+    fn plugins_get_the_session_tempo_map_at_instantiation_and_on_change() {
+        let (mut s, t) = session_with_dc(0.5, 48_000 * 4);
+        s.track_mut(t).unwrap().mixer.inserts[0] = Some(Insert::new("clap:test.tempo"));
+        let maps = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ear = TempoEar { inner: soundcraft_dsp::create("gain").unwrap(), maps: Arc::clone(&maps) };
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.set_external_instances(true);
+        eng.adopt(vec![PreparedInstance { track: t, slot: 0, id: "clap:test.tempo".into(), ch: 1, plugin: Box::new(ear) }]);
+        render_block(&mut eng, &s, 0);
+        render_block(&mut eng, &s, 512);
+        assert_eq!(maps.lock().unwrap().clone(), vec![s.tempo.clone()], "once at instantiation, not every block");
+        s.tempo.set_tempo(0, 90.0).unwrap();
+        s.tempo.set_tempo(3840, 140.0).unwrap();
+        render_block(&mut eng, &s, 1024);
+        render_block(&mut eng, &s, 1536);
+        let maps = maps.lock().unwrap();
+        assert_eq!(maps.len(), 2, "once more when the map changed");
+        assert_eq!(maps[1], s.tempo);
+        assert_eq!((maps[1].tempo_at_tick(0), maps[1].tempo_at_tick(3840)), (90.0, 140.0));
     }
 
     struct Ears {

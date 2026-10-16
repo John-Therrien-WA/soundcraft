@@ -1,0 +1,16 @@
+[package]
+name = "wild-animal-plugins"
+description = "Wild Animal's own plugins, written against soundcraft-dsp's Plugin trait, with measured checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+soundcraft-dsp.workspace = true
+soundcraft-time.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

@@ -74,8 +74,16 @@ fn static_curve_matches_the_gain_computer() {
             assert!(dc < 0.2, "DC: {dc} dB");
             // On a tone the reduction settles where attack (only near the peaks) balances
             // release (the rest of each cycle): below the curve's value at the peak, by an
-            // amount set by attack/release, not by frequency. Pinned as measured.
-            assert!(tone < 1.6 && min_tone > 0.0, "tone at 10/100 ms: {tone} dB, least {min_tone}");
+            // amount set by attack/release, not by frequency. Pinned as measured (0.821,
+            // 1.232, 1.478 dB at ratio 2, 4, 10), so a regression or a fix both show; the
+            // textbook bound is `tone_follows_the_static_curve`, ignored until upstream fixes
+            // the detector (WILD-ANIMAL.md, findings against upstream).
+            let band = match ratio {
+                2.0 => 0.80..0.86,
+                4.0 => 1.20..1.27,
+                _ => 1.45..1.51,
+            };
+            assert!(band.contains(&tone) && min_tone > 0.0, "tone at 10/100 ms, ratio {ratio}: {tone} dB (measured band {band:?}), least {min_tone}");
             assert!(slow < 0.2, "tone at 1/1000 ms: {slow} dB");
         }
     }
@@ -86,6 +94,20 @@ fn static_curve_matches_the_gain_computer() {
             .map(|&l| format!("{:+.3}", l + sine_gain_db(&mut c, f, SR, l, 1.0, 0.2) - (l - f64::from(compress_gr(l as f32, -20.0, 10.0, 0.0)))))
             .collect();
         println!("ratio 10 knee 0, tone {f} Hz at -10 and 0 dBFS: error {} dB (positive: less reduction than the curve)", e.join(", "));
+    }
+}
+
+/// The original brief's bound: on a tone at the default 10 ms attack and 100 ms release the
+/// steady reduction is within 0.2 dB of the static curve. Missed by 0.8 to 1.5 dB, because
+/// upstream's gain computer runs on the instantaneous sample.
+#[test]
+#[ignore = "upstream finding, see WILD-ANIMAL.md"]
+fn tone_follows_the_static_curve() {
+    for knee in [0.0f32, 6.0] {
+        for ratio in [2.0f32, 4.0, 10.0] {
+            let (_, tone, _) = curve_errors(ratio, knee, 10.0, 100.0);
+            assert!(tone < 0.2, "ratio {ratio} knee {knee}: tone at 10/100 ms {tone} dB from the curve");
+        }
     }
 }
 
@@ -132,9 +154,10 @@ fn attack_and_release_reach_63_percent_at_their_settings() {
         assert!(near(drt, r), "DC release {drt}");
         assert!(near(trt, r), "tone release {trt}");
         // On a tone the reduction grows only while the waveform's peak region exceeds it, so
-        // attack is slower than set: measured 1.7x at 10 ms and 2.2x at 1 ms. Pinned as measured.
+        // attack is slower than set: measured 1.68x at 10 ms and 2.19x at 1 ms. Pinned as
+        // measured, both ways.
         let ratio = tat * 1e3 / f64::from(a);
-        assert!((1.0..2.5).contains(&ratio), "tone attack {ratio:.2}x the setting");
+        assert!((1.6..2.3).contains(&ratio), "tone attack {ratio:.2}x the setting");
     }
 }
 
@@ -180,9 +203,10 @@ fn lookahead_catches_a_step_before_it_passes() {
     let (got, want) = lookahead_overshoot(&[("threshold", -20.0f32), ("ratio", 4.0), ("knee", 0.0), ("attack", 1.0), ("lookahead", 5.0)], 4.0, false);
     assert!(got - want <= 0.5, "DC overshoot {} dB with 5 ms lookahead and 1 ms attack", got - want);
     // A tone is not: lookahead only delays the audio and the attack is not tied to it, and the
-    // detector follows the waveform. Measured +1.1 dB at attack 1 ms. Pinned as measured.
+    // detector follows the waveform. Measured +1.12 dB at attack 1 ms. Pinned as measured,
+    // both ways.
     let (got, want) = lookahead_overshoot(&[("threshold", -20.0f32), ("ratio", 4.0), ("knee", 0.0), ("attack", 1.0), ("lookahead", 5.0)], 4.0, true);
-    assert!(got - want <= 1.3, "tone overshoot {} dB with 5 ms lookahead and 1 ms attack", got - want);
+    assert!((0.9..=1.3).contains(&(got - want)), "tone overshoot {} dB with 5 ms lookahead and 1 ms attack", got - want);
 }
 
 #[test]

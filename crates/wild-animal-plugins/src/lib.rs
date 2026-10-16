@@ -16,7 +16,7 @@ pub mod eq;
 pub mod measure;
 
 use std::any::Any;
-use std::sync::{Arc, Once};
+use std::sync::{Arc, OnceLock};
 
 use soundcraft_dsp::{Plugin, PluginFactory, PluginInfo};
 use soundcraft_time::TempoMap;
@@ -34,20 +34,18 @@ fn new_compressor() -> Box<dyn Plugin> {
 
 /// Adds [`CATALOGUE`] to the DSP registry, so `soundcraft_dsp::plugins()`, `plugin_info()` and
 /// `create()` (and the engine's `engine.plugins`, insert creation, offline rendering) know them.
-/// Idempotent; the first call registers. An id clash with another plugin is a build error of
-/// ours, reported as `Err` with the id.
+/// Idempotent; the first call registers and every call returns that first result. An id clash
+/// with another plugin is a build error of ours, reported as `Err` with the id, on every call.
 pub fn register() -> Result<(), String> {
-    static ONCE: Once = Once::new();
-    let mut result = Ok(());
-    ONCE.call_once(|| {
-        for (info, factory) in CATALOGUE {
-            if let Err(e) = soundcraft_dsp::register_external(info, *factory) {
-                result = Err(format!("wild-animal-plugins: {e}"));
-                return;
+    static RESULT: OnceLock<Result<(), String>> = OnceLock::new();
+    RESULT
+        .get_or_init(|| {
+            for (info, factory) in CATALOGUE {
+                soundcraft_dsp::register_external(info, *factory).map_err(|e| format!("wild-animal-plugins: {e}"))?;
             }
-        }
-    });
-    result
+            Ok(())
+        })
+        .clone()
 }
 
 /// A plugin that reads the session's tempo map directly. The engine hands the map over when

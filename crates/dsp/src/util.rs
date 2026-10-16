@@ -3,83 +3,86 @@
 use std::f32::consts::TAU;
 
 /// Default sample rate used when a host passes something unusable.
-pub(crate) const FALLBACK_SR: f32 = 48_000.0;
+pub const FALLBACK_SR: f32 = 48_000.0;
 
 /// Sanitizes a host sample rate into 1 kHz ..= 1.536 MHz.
-pub(crate) fn sane_sr(sr: f32) -> f32 {
+pub fn sane_sr(sr: f32) -> f32 {
     if sr.is_finite() && sr >= 1000.0 { sr.min(1_536_000.0) } else { FALLBACK_SR }
 }
 
 /// Upper bound on channels any plugin will allocate state for.
-pub(crate) const MAX_CHANNELS: usize = 64;
+pub const MAX_CHANNELS: usize = 64;
 
-pub(crate) fn sane_channels(ch: usize) -> usize {
+pub fn sane_channels(ch: usize) -> usize {
     ch.min(MAX_CHANNELS)
 }
 
 /// Converts milliseconds to (fractional) samples, never negative or non-finite.
 #[inline]
-pub(crate) fn ms_to_samples(ms: f32, sr: f32) -> f32 {
+pub fn ms_to_samples(ms: f32, sr: f32) -> f32 {
     let s = ms * 0.001 * sr;
     if s.is_finite() { s.max(0.0) } else { 0.0 }
 }
 
 /// One-pole coefficient for a time constant in milliseconds.
 #[inline]
-pub(crate) fn time_coef(ms: f32, sr: f32) -> f32 {
+pub fn time_coef(ms: f32, sr: f32) -> f32 {
     let n = ms_to_samples(ms, sr);
     if n < 1.0e-3 { 0.0 } else { (-1.0 / n).exp() }
 }
 
 /// Flushes denormals and non-finite values in feedback paths to zero.
 #[inline]
-pub(crate) fn flush(x: f32) -> f32 {
+pub fn flush(x: f32) -> f32 {
     if x.is_finite() && x.abs() > 1.0e-25 { x } else { 0.0 }
 }
 
 /// Number of frames a plugin may safely touch.
-pub(crate) fn frames_in(io: &[Vec<f32>], frames: usize, channels: usize) -> usize {
+pub fn frames_in(io: &[Vec<f32>], frames: usize, channels: usize) -> usize {
     io.iter().take(channels).map(Vec::len).fold(frames, usize::min)
 }
 
 /// One-pole exponential parameter smoother (no zipper noise).
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Smoother {
+pub struct Smoother {
     cur: f32,
     target: f32,
     coef: f32,
 }
 
 impl Smoother {
-    pub(crate) fn new(v: f32) -> Self {
+    pub fn new(v: f32) -> Self {
         Self { cur: v, target: v, coef: 0.0 }
     }
 
     /// Sets the time constant (default ~20 ms is typical).
-    pub(crate) fn set_time(&mut self, ms: f32, sr: f32) {
+    pub fn set_time(&mut self, ms: f32, sr: f32) {
         self.coef = time_coef(ms, sr);
     }
 
-    pub(crate) fn set(&mut self, v: f32) {
+    pub fn set(&mut self, v: f32) {
         if v.is_finite() {
             self.target = v;
         }
     }
 
-    pub(crate) fn snap(&mut self) {
+    pub fn snap(&mut self) {
         self.cur = self.target;
     }
 
-    pub(crate) fn value(&self) -> f32 {
+    pub fn value(&self) -> f32 {
         self.cur
     }
 
-    pub(crate) fn settling(&self) -> bool {
+    pub fn settling(&self) -> bool {
         self.cur != self.target
     }
 
+    /// Advances one sample and returns the new value. A smoother never ends, so it is not an
+    /// `Iterator`.
     #[inline]
-    pub(crate) fn next(&mut self) -> f32 {
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> f32 {
         if self.cur != self.target {
             self.cur = self.target + (self.cur - self.target) * self.coef;
             if (self.cur - self.target).abs() <= 1.0e-6 * (1.0 + self.target.abs()) {
@@ -90,7 +93,7 @@ impl Smoother {
     }
 
     /// Advances `n` samples at once (used for block-rate coefficient updates).
-    pub(crate) fn advance(&mut self, n: usize) -> f32 {
+    pub fn advance(&mut self, n: usize) -> f32 {
         if self.cur != self.target {
             let k = self.coef.powi(n.min(i32::MAX as usize) as i32);
             self.cur = self.target + (self.cur - self.target) * k;
@@ -104,7 +107,7 @@ impl Smoother {
 
 /// Power-of-two circular delay line with fractional reads.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct DelayLine {
+pub struct DelayLine {
     buf: Vec<f32>,
     mask: usize,
     pos: usize,
@@ -112,24 +115,24 @@ pub(crate) struct DelayLine {
 
 impl DelayLine {
     /// Allocates room for at least `max_delay` samples of delay.
-    pub(crate) fn allocate(&mut self, max_delay: usize) {
+    pub fn allocate(&mut self, max_delay: usize) {
         let len = max_delay.saturating_add(4).clamp(4, 1 << 26).next_power_of_two();
         self.buf = vec![0.0; len];
         self.mask = len - 1;
         self.pos = 0;
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.buf.iter_mut().for_each(|x| *x = 0.0);
     }
 
     /// Largest delay (in samples) that `read` supports.
-    pub(crate) fn max_delay(&self) -> f32 {
+    pub fn max_delay(&self) -> f32 {
         self.buf.len().saturating_sub(3) as f32
     }
 
     #[inline]
-    pub(crate) fn push(&mut self, x: f32) {
+    pub fn push(&mut self, x: f32) {
         if let Some(s) = self.buf.get_mut(self.pos) {
             *s = x;
         }
@@ -138,14 +141,14 @@ impl DelayLine {
 
     /// Reads the sample written `d` pushes ago (`d = 1` is the last written sample).
     #[inline]
-    pub(crate) fn tap(&self, d: usize) -> f32 {
+    pub fn tap(&self, d: usize) -> f32 {
         let idx = self.pos.wrapping_sub(d) & self.mask;
         self.buf.get(idx).copied().unwrap_or(0.0)
     }
 
     /// Linear-interpolated read `d` samples back (clamped to 1..=max_delay).
     #[inline]
-    pub(crate) fn read(&self, d: f32) -> f32 {
+    pub fn read(&self, d: f32) -> f32 {
         let d = if d.is_finite() { d.clamp(1.0, self.max_delay().max(1.0)) } else { 1.0 };
         let i = d as usize;
         let f = d - i as f32;
@@ -156,7 +159,7 @@ impl DelayLine {
 
     /// Cubic (Hermite) interpolated read, for modulated delays.
     #[inline]
-    pub(crate) fn read_cubic(&self, d: f32) -> f32 {
+    pub fn read_cubic(&self, d: f32) -> f32 {
         let d = if d.is_finite() { d.clamp(2.0, (self.max_delay() - 1.0).max(2.0)) } else { 2.0 };
         let i = d as usize;
         let f = d - i as f32;

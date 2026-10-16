@@ -3,45 +3,45 @@
 use crate::{ParamInfo, Taper, Unit};
 
 /// A continuous parameter.
-pub(crate) const fn p(id: &'static str, name: &'static str, min: f32, max: f32, default: f32, unit: Unit, taper: Taper) -> ParamInfo {
+pub const fn p(id: &'static str, name: &'static str, min: f32, max: f32, default: f32, unit: Unit, taper: Taper) -> ParamInfo {
     ParamInfo { id, name, min, max, default, unit, taper, choices: &[] }
 }
 
 /// A linear-taper parameter.
-pub(crate) const fn lin(id: &'static str, name: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> ParamInfo {
+pub const fn lin(id: &'static str, name: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> ParamInfo {
     p(id, name, min, max, default, unit, Taper::Linear)
 }
 
 /// A log-taper parameter (frequencies, times, ratios).
-pub(crate) const fn log(id: &'static str, name: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> ParamInfo {
+pub const fn log(id: &'static str, name: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> ParamInfo {
     p(id, name, min, max, default, unit, Taper::Log)
 }
 
 /// An on/off switch.
-pub(crate) const fn toggle(id: &'static str, name: &'static str, default_on: bool) -> ParamInfo {
+pub const fn toggle(id: &'static str, name: &'static str, default_on: bool) -> ParamInfo {
     ParamInfo { id, name, min: 0.0, max: 1.0, default: if default_on { 1.0 } else { 0.0 }, unit: Unit::Toggle, taper: Taper::Linear, choices: &[] }
 }
 
 /// A list choice; the value is the index.
-pub(crate) const fn choice(id: &'static str, name: &'static str, choices: &'static [&'static str], default: usize) -> ParamInfo {
+pub const fn choice(id: &'static str, name: &'static str, choices: &'static [&'static str], default: usize) -> ParamInfo {
     let max = if choices.is_empty() { 0.0 } else { (choices.len() - 1) as f32 };
     ParamInfo { id, name, min: 0.0, max, default: default as f32, unit: Unit::Choice, taper: Taper::Linear, choices }
 }
 
 /// Current values for a plugin's parameter table (allocated once at construction).
 #[derive(Debug, Clone)]
-pub(crate) struct Params {
+pub struct Params {
     info: &'static [ParamInfo],
     values: Vec<f32>,
 }
 
 impl Params {
-    pub(crate) fn new(info: &'static [ParamInfo]) -> Self {
+    pub fn new(info: &'static [ParamInfo]) -> Self {
         Self { info, values: info.iter().map(|p| p.default).collect() }
     }
 
     /// Clamps and stores; returns the parameter index, or `None` for an unknown id.
-    pub(crate) fn set(&mut self, id: &str, value: f32) -> Option<usize> {
+    pub fn set(&mut self, id: &str, value: f32) -> Option<usize> {
         let idx = self.info.iter().position(|p| p.id == id)?;
         let info = self.info.get(idx)?;
         let slot = self.values.get_mut(idx)?;
@@ -49,24 +49,24 @@ impl Params {
         Some(idx)
     }
 
-    pub(crate) fn get(&self, id: &str) -> Option<f32> {
+    pub fn get(&self, id: &str) -> Option<f32> {
         let idx = self.info.iter().position(|p| p.id == id)?;
         self.values.get(idx).copied()
     }
 
     /// Value by index (0.0 if out of range, which only a table/index mismatch could cause).
     #[inline]
-    pub(crate) fn v(&self, idx: usize) -> f32 {
+    pub fn v(&self, idx: usize) -> f32 {
         self.values.get(idx).copied().unwrap_or(0.0)
     }
 
     #[inline]
-    pub(crate) fn on(&self, idx: usize) -> bool {
+    pub fn on(&self, idx: usize) -> bool {
         self.v(idx) >= 0.5
     }
 
     #[inline]
-    pub(crate) fn choice(&self, idx: usize) -> usize {
+    pub fn choice(&self, idx: usize) -> usize {
         let v = self.v(idx);
         if v.is_finite() && v > 0.0 { v.round() as usize } else { 0 }
     }

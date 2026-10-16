@@ -172,7 +172,7 @@ impl Biquad {
 }
 
 /// Butterworth Q values for cascaded sections making an `order`-th order filter (2, 4).
-pub(crate) fn butterworth_qs(order: usize) -> &'static [f32] {
+pub fn butterworth_qs(order: usize) -> &'static [f32] {
     match order {
         4 => &[0.541_196_1, 1.306_563],
         _ => &[std::f32::consts::FRAC_1_SQRT_2],

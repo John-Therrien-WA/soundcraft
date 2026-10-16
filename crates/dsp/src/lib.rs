@@ -18,11 +18,11 @@ pub mod meter;
 pub mod offline;
 mod osc;
 pub mod pan;
-mod params;
+pub mod params;
 pub mod pitch_detect;
 pub mod plugins;
 pub mod spectrum;
-mod util;
+pub mod util;
 
 pub use offline::FadeShape;
 pub use osc::Waveform;

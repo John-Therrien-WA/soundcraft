@@ -17,6 +17,7 @@ workspace = true
 soundcraft-engine.workspace = true
 soundcraft-playback.workspace = true
 soundcraft-time.workspace = true
+wild-animal-plugins = { path = "../../crates/wild-animal-plugins" }
 serde_json.workspace = true
 log.workspace = true
 

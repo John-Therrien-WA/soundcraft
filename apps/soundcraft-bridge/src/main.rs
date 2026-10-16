@@ -13,7 +13,8 @@
 //! stdin: one JSON request per line; stdout: one JSON reply per line; stderr: the log
 //! (level from SOUNDCRAFT_BRIDGE_LOG: error|warn|info|debug|trace|off).
 //! Exit: 0 stdin closed or bridge.quit; 1 stdin or stdout failed; 2 bad arguments;
-//! 3 the audio output was refused (unknown device, buffer out of range, nothing opened); 4 the control port could not be bound.
+//! 3 the audio output was refused (unknown device, buffer out of range, nothing opened); 4 the control port could not be bound;
+//! 5 our plugins (`wild-animal-plugins`) could not be registered.
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -27,6 +28,7 @@ use std::process::ExitCode;
 const USAGE: u8 = 2;
 const AUDIO: u8 = 3;
 const CONTROL_PORT: u8 = 4;
+const PLUGINS: u8 = 5;
 
 /// The command line, checked up front: a misspelled flag fails before anything opens.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -110,6 +112,10 @@ fn main() -> ExitCode {
         Err(e) => return fail(USAGE, &format!("{e} (see --help)")),
     };
     logger::init(std::env::var("SOUNDCRAFT_BRIDGE_LOG").ok().as_deref());
+    // Our plugins join upstream's in the DSP registry before the engine reads it.
+    if let Err(e) = wild_animal_plugins::register() {
+        return fail(PLUGINS, &e);
+    }
     let mut bridge = match open(&args) {
         Ok(b) => b,
         Err(e) => return fail(AUDIO, &e),

@@ -3625,6 +3625,7 @@ dependencies = [
  "soundcraft-engine",
  "soundcraft-playback",
  "soundcraft-time",
+ "wild-animal-plugins",
 ]
 
 [[package]]

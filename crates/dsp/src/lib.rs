@@ -324,22 +324,90 @@ impl SampleSource for SampleBuffer {
     }
 }
 
-/// The plugin registry.
+/// The plugin registry: the built-ins in menu order, then the plugins added with
+/// [`register_external`] in the order they were registered.
 pub fn plugins() -> &'static [&'static PluginInfo] {
-    plugins::REGISTRY
+    let all = *read_lock(&ALL);
+    if all.is_empty() { plugins::REGISTRY } else { all }
 }
 
 /// Creates a plugin by id, prepared for 48 kHz stereo with 1024-frame blocks.
 /// Hosts should call `prepare` again with their real settings.
 pub fn create(id: &str) -> Option<Box<dyn Plugin>> {
-    let mut p = plugins::instantiate(id)?;
+    let mut p = plugins::instantiate(id).or_else(|| instantiate_external(id))?;
     p.prepare(48_000.0, 1024, 2);
     Some(p)
 }
 
 /// Looks up a plugin description by id.
 pub fn plugin_info(id: &str) -> Option<&'static PluginInfo> {
-    plugins::REGISTRY.iter().copied().find(|i| i.id == id)
+    plugins().iter().copied().find(|i| i.id == id)
+}
+
+/// Constructs an (unprepared) instance of a plugin registered with [`register_external`].
+pub type PluginFactory = fn() -> Box<dyn Plugin>;
+
+/// Why [`register_external`] refused a plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegisterError {
+    /// The id is already taken by a built-in or an earlier registration.
+    DuplicateId(&'static str),
+    /// The factory made a plugin whose `info()` is not the registered description.
+    InfoMismatch(&'static str),
+}
+
+impl std::fmt::Display for RegisterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegisterError::DuplicateId(id) => write!(f, "plugin id {id:?} is already registered"),
+            RegisterError::InfoMismatch(id) => write!(f, "the factory for {id:?} makes a plugin with another description"),
+        }
+    }
+}
+
+impl std::error::Error for RegisterError {}
+
+/// Adds a plugin implemented outside this crate to the registry, so that [`plugins`],
+/// [`plugin_info`] and [`create`] (and every host built on them) treat it like a built-in.
+/// Call it at program start, before the registry is read by a host; registrations are never
+/// removed. Allocates and takes a lock: never call it from the audio thread. The factory is
+/// called once, before any lock is taken, so a factory may itself read the registry.
+pub fn register_external(info: &'static PluginInfo, factory: PluginFactory) -> Result<(), RegisterError> {
+    let info_matches = std::ptr::eq(factory().info(), info);
+    let mut externals = write_lock(&EXTERNAL);
+    let mut all = write_lock(&ALL);
+    let current: &[&PluginInfo] = if all.is_empty() { plugins::REGISTRY } else { *all };
+    if current.iter().any(|i| i.id == info.id) {
+        return Err(RegisterError::DuplicateId(info.id));
+    }
+    if !info_matches {
+        return Err(RegisterError::InfoMismatch(info.id));
+    }
+    externals.push((info, factory));
+    let mut next = current.to_vec();
+    next.push(info);
+    // The registry is a `&'static` slice: each registration leaks one small list, a handful of
+    // pointers at program start.
+    *all = Box::leak(next.into_boxed_slice());
+    Ok(())
+}
+
+/// Plugins added with [`register_external`] and their factories.
+static EXTERNAL: std::sync::RwLock<Vec<(&'static PluginInfo, PluginFactory)>> = std::sync::RwLock::new(Vec::new());
+/// Built-ins plus externals once anything is registered; empty means "built-ins only".
+static ALL: std::sync::RwLock<&'static [&'static PluginInfo]> = std::sync::RwLock::new(&[]);
+
+fn read_lock<T>(l: &std::sync::RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn write_lock<T>(l: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn instantiate_external(id: &str) -> Option<Box<dyn Plugin>> {
+    let factory = read_lock(&EXTERNAL).iter().find(|(i, _)| i.id == id).map(|(_, f)| *f)?;
+    Some(factory())
 }
 
 /// Whether a plugin makes sound instead of processing its input (it ignores the input).

@@ -14,6 +14,7 @@ const bridge = spawn(binPath, ["--device", "MacBook Pro Speakers", "--buffer", "
 - **Closing stdin ends the bridge** (exit 0), also with `--control`: the spawning process owns its lifetime, and an orphaned bridge never holds the audio device. `bridge.quit` ends it too, after its reply.
 - **Requests are handled one at a time, on one thread.** A long command (`file.bounce_mix`, a plugin scan, `file.import_audio`) holds every other request, `transport.status` included, from every client until it is done. A client that pipelines requests must read replies concurrently with writing, or a full pipe stalls both ends.
 - Startup to the first reply is about 15 ms with `--no-audio` and about 0.6 s when opening a Bluetooth output. The first run of a freshly built binary takes about 0.5 s longer while macOS scans it.
+- **Our plugins are there from the start:** `wa_eq7` and `wa_compressor` (`crates/wild-animal-plugins`) are registered before the engine opens, so `engine.plugins` lists them beside upstream's and `mix.insert` takes them by id.
 - Third-party plugins run in the bridge's process; one that prints to stdout would put a non-JSON line on the protocol channel. A reader of stdout therefore skips any line that does not parse as a JSON object with an `id`, and logs it.
 
 ## Flags
@@ -37,6 +38,7 @@ const bridge = spawn(binPath, ["--device", "MacBook Pro Speakers", "--buffer", "
 | 2 | bad arguments |
 | 3 | the audio output was refused: unknown device, buffer out of range or refused by the device, no output could be opened at all, or the opened stream would not start (the bridge never falls back to silence on its own) |
 | 4 | the control port could not be bound |
+| 5 | our plugins (`crates/wild-animal-plugins`) could not be registered: an id clash, a build error of ours |
 | 101 | a panic outside an engine command (a panic inside an engine command is caught and answered as an error reply) |
 
 ## Wire format

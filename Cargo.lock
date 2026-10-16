@@ -4841,6 +4841,8 @@ version = "0.7.0"
 dependencies = [
  "log",
  "soundcraft-dsp",
+ "soundcraft-mix",
+ "soundcraft-model",
  "soundcraft-time",
 ]
 

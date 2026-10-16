@@ -1,4 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![deny(clippy::indexing_slicing)]
 //! Wild Animal's own plugins, inside the DAW: each implements `soundcraft_dsp::Plugin`, so the
 //! engine lists, creates, automates and renders it like a built-in, and each can be edited and
 //! forked here. [`register`] adds them to the DSP registry; call it once at program start.

@@ -28,16 +28,20 @@ pub fn db(a: f64) -> f64 {
 }
 
 /// Runs `input` through the plugin on `channels` identical channels in blocks of [`BLOCK`];
-/// returns channel 0 of the output.
+/// returns channel 0 of the output (empty for `channels == 0`).
 pub fn run(plugin: &mut dyn Plugin, input: &[f32], channels: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(input.len());
     let mut io = vec![vec![0.0f32; BLOCK]; channels];
     for chunk in input.chunks(BLOCK) {
         for ch in io.iter_mut() {
-            ch[..chunk.len()].copy_from_slice(chunk);
+            if let Some(dst) = ch.get_mut(..chunk.len()) {
+                dst.copy_from_slice(chunk);
+            }
         }
         plugin.process(&mut io, chunk.len());
-        out.extend_from_slice(&io[0][..chunk.len()]);
+        if let Some(y) = io.first().and_then(|ch| ch.get(..chunk.len())) {
+            out.extend_from_slice(y);
+        }
     }
     out
 }
@@ -65,15 +69,22 @@ pub fn fit_amplitude(x: &[f32], freq: f64, sr: f64) -> f64 {
 
 /// Steady-state gain in dB of the plugin for a sine at `freq` and level `level_db`: the plugin
 /// is reset, driven for `settle_s` seconds, and the gain read over the next `window_s`
-/// seconds (the fit runs on the output and the input over the same samples).
+/// seconds (the fit runs on the output and the input over the same samples). NaN if the
+/// plugin returned fewer samples than it was given, so a check on the result fails.
 pub fn sine_gain_db(plugin: &mut dyn Plugin, freq: f64, sr: f64, level_db: f64, settle_s: f64, window_s: f64) -> f64 {
     plugin.reset();
     let settle = (settle_s * sr) as usize;
     let window = ((window_s * sr) as usize).max(16);
     let x = sine(freq, sr, amp(level_db), settle + window);
     let y = run(plugin, &x, 2);
-    let a_in = fit_amplitude(&x[settle..], freq, sr);
-    let a_out = fit_amplitude(&y[settle..], freq, sr);
+    let (Some((_, x_win)), Some((_, y_win))) = (x.split_at_checked(settle), y.split_at_checked(settle)) else {
+        return f64::NAN;
+    };
+    if y_win.len() != x_win.len() {
+        return f64::NAN;
+    }
+    let a_in = fit_amplitude(x_win, freq, sr);
+    let a_out = fit_amplitude(y_win, freq, sr);
     db(a_out / a_in)
 }
 
